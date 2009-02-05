@@ -103,6 +103,7 @@
 #include <quote_821_local.h>
 #include <mail_proto.h>
 #include <mime_state.h>
+#include <pfixtls.h>
 
 /* Application-specific. */
 
@@ -170,6 +171,8 @@ int     smtp_helo(SMTP_STATE *state)
     char   *words;
     char   *word;
     int     n;
+    int     oldfeatures;
+    int     rval;
 
     /*
      * Prepare for disaster.
@@ -232,7 +235,8 @@ int     smtp_helo(SMTP_STATE *state)
 				   translit(resp->str, "\n", " ")));
 	return (0);
     }
-
+    if (var_smtp_always_ehlo)
+	state->features |= SMTP_FEATURE_ESMTP;
     /*
      * Pick up some useful features offered by the SMTP server. XXX Until we
      * have a portable routine to convert from string to off_t with proper
@@ -244,6 +248,7 @@ int     smtp_helo(SMTP_STATE *state)
      * MicroSoft implemented AUTH based on an old draft.
      */
     lines = resp->str;
+    oldfeatures = state->features;		/* remember */
     while ((words = mystrtok(&lines, "\n")) != 0) {
 	if (mystrtok(&words, "- ") && (word = mystrtok(&words, " \t=")) != 0) {
 	    if (strcasecmp(word, "8BITMIME") == 0)
@@ -260,6 +265,8 @@ int     smtp_helo(SMTP_STATE *state)
 			state->size_limit = off_cvt_string(word);
 		}
 	    }
+	    else if (strcasecmp(word, "STARTTLS") == 0)
+		state->features |= SMTP_FEATURE_STARTTLS;
 #ifdef USE_SASL_AUTH
 	    else if (var_smtp_sasl_enable && strcasecmp(word, "AUTH") == 0)
 		smtp_sasl_helo_auth(state, words);
@@ -277,6 +284,128 @@ int     smtp_helo(SMTP_STATE *state)
 	msg_info("server features: 0x%x size %.0f",
 		 state->features, (double) state->size_limit);
 
+#ifdef HAS_SSL
+    if ((state->features & SMTP_FEATURE_STARTTLS) &&
+	(var_smtp_tls_note_starttls_offer) &&
+	(!(session->tls_enforce_tls || session->tls_use_tls)))
+ 	msg_info("Host offered STARTTLS: [%s]", session->host);
+    if ((session->tls_enforce_tls) &&
+	!(state->features & SMTP_FEATURE_STARTTLS))
+    {
+	/*
+	 * We are enforced to use TLS but it is not offered, so we will give
+	 * up on this host. We won't even try STARTTLS, because we could
+	 * receive a "500 command unrecognized" which would bounce the
+	 * message. We instead want to delay until STARTTLS becomes
+	 * available.
+	 */
+	return (smtp_site_fail(state, 450, "Could not start TLS: not offered"));
+    }
+    if ((session->tls_enforce_tls) && !pfixtls_clientengine) {
+	/*
+	 * We would like to start client TLS, but our own TLS-engine is
+	 * not running.
+	 */
+	return (smtp_site_fail(state, 450,
+		 "Could not start TLS: our TLS-engine not running"));
+    }
+    if ((state->features & SMTP_FEATURE_STARTTLS) &&
+	((session->tls_use_tls && pfixtls_clientengine) ||
+	 (session->tls_enforce_tls))) {
+	/*
+         * Try to use the TLS feature
+         */
+	smtp_chat_cmd(state, "STARTTLS");
+	if ((resp = smtp_chat_resp(state))->code / 100 != 2) {
+	    state->features &= ~SMTP_FEATURE_STARTTLS;
+	    /*
+	     * At this point a political decision is necessary. If we
+	     * enforce usage of tls, we have to close the connection
+	     * now.
+	     */
+	    if (session->tls_enforce_tls)
+		return (smtp_site_fail(state, resp->code,
+					 "host %s refused to start TLS: %s",
+					   session->host,
+					   translit(resp->str, "\n", " ")));
+	} else {
+	    if (rval = pfixtls_start_clienttls(session->stream,
+					       var_smtp_starttls_tmout,
+					       session->tls_enforce_peername,
+					       session->host,
+					       &(session->tls_info)))
+		return (smtp_site_fail(state, 450,
+				 "Could not start TLS: client failure"));
+
+
+	    /*
+	     * Now the connection is established and maybe we do have a
+	     * validated cert with a CommonName in it.
+	     * In enforce_peername state, the handshake would already have
+	     * been terminated so the check here is for logging only!
+	     */
+	    if (session->tls_info.peer_CN != NULL) {
+		if (!session->tls_info.peer_verified) {
+		    msg_info("Peer certficate could not be verified");
+		    if (session->tls_enforce_tls) {
+			pfixtls_stop_clienttls(session->stream,
+					       var_smtp_starttls_tmout, 1,
+					       &(session->tls_info));
+			return(smtp_site_fail(state, 450, "TLS-failure: Could not verify certificate"));
+		    }
+		}
+	    } else if (session->tls_enforce_tls) {
+		pfixtls_stop_clienttls(session->stream,
+				       var_smtp_starttls_tmout, 1,
+				       &(session->tls_info));
+		return (smtp_site_fail(state, 450, "TLS-failure: Cannot verify hostname"));
+	    }
+
+	    /*
+	     * At this point we have to re-negotiate the "EHLO" to reget
+	     * the feature-list
+	     */
+	    state->features = oldfeatures;
+#ifdef USE_SASL_AUTH
+	    if (state->sasl_mechanism_list) {
+		myfree(state->sasl_mechanism_list);
+		state->sasl_mechanism_list = 0;
+	    }
+#endif
+	    if (state->features & SMTP_FEATURE_ESMTP) {
+		smtp_chat_cmd(state, "EHLO %s", var_myhostname);
+		if ((resp = smtp_chat_resp(state))->code / 100 != 2)
+		    state->features &= ~SMTP_FEATURE_ESMTP;
+	    }
+	    lines = resp->str;
+	    (void) mystrtok(&lines, "\n");
+	    while ((words = mystrtok(&lines, "\n")) != 0) {
+		if (mystrtok(&words, "- ") &&
+		    (word = mystrtok(&words, " \t=")) != 0) {
+		    if (strcasecmp(word, "8BITMIME") == 0)
+			state->features |= SMTP_FEATURE_8BITMIME;
+		    else if (strcasecmp(word, "PIPELINING") == 0)
+			state->features |= SMTP_FEATURE_PIPELINING;
+		    else if (strcasecmp(word, "SIZE") == 0)
+			state->features |= SMTP_FEATURE_SIZE;
+		    else if (strcasecmp(word, "STARTTLS") == 0)
+			state->features |= SMTP_FEATURE_STARTTLS;
+#ifdef USE_SASL_AUTH
+		    else if (var_smtp_sasl_enable &&
+			     strcasecmp(word, "AUTH") == 0)
+			smtp_sasl_helo_auth(state, words);
+#endif
+		}
+	    }
+	    /*
+	     * Actually, at this point STARTTLS should not be offered
+	     * anymore, so we could check for a protocol violation, but
+	     * what should we do then?
+	     */
+
+	}
+    }
+#endif
 #ifdef USE_SASL_AUTH
     if (var_smtp_sasl_enable && (state->features & SMTP_FEATURE_AUTH))
 	return (smtp_sasl_helo_login(state));
@@ -808,7 +937,25 @@ int     smtp_xfer(SMTP_STATE *state)
 		prev_type = rec_type;
 	    }
 
-	    if (prev_type == REC_TYPE_CONT)	/* missing newline at end */
+	    if (state->mime_state) {
+
+		/*
+		 * The cleanup server normally ends MIME content with a
+		 * normal text record. The following code is needed to flush
+		 * an internal buffer when someone submits 8-bit mail not
+		 * ending in newline via /usr/sbin/sendmail while MIME input
+		 * processing is turned off, and MIME 8bit->7bit conversion
+		 * is requested upon delivery.
+		 */
+		mime_errs =
+		    mime_state_update(state->mime_state, rec_type, "", 0);
+		if (mime_errs) {
+		    smtp_mesg_fail(state, 554,
+				   "MIME 7-bit conversion failed: %s",
+				   mime_state_error(mime_errs));
+		    RETURN(0);
+		}
+	    } else if (prev_type == REC_TYPE_CONT)	/* missing newline */
 		smtp_fputs("", 0, session->stream);
 	    if ((state->features & SMTP_FEATURE_MAYBEPIX) != 0
 		&& request->arrival_time < vstream_ftime(session->stream)

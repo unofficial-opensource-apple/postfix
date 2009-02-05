@@ -148,6 +148,7 @@ smtpd.o: ../../include/quote_flags.h
 smtpd.o: ../../include/lex_822.h
 smtpd.o: ../../include/namadr_list.h
 smtpd.o: ../../include/mail_server.h
+smtpd.o: ../../include/pfixtls.h
 smtpd.o: smtpd_token.h
 smtpd.o: smtpd.h
 smtpd.o: smtpd_check.h
@@ -176,6 +177,7 @@ smtpd_chat.o: ../../include/post_mail.h
 smtpd_chat.o: ../../include/cleanup_user.h
 smtpd_chat.o: ../../include/mail_error.h
 smtpd_chat.o: ../../include/name_mask.h
+smtpd_chat.o: ../../include/pfixtls.h
 smtpd_chat.o: smtpd.h
 smtpd_chat.o: ../../include/mail_stream.h
 smtpd_chat.o: smtpd_chat.h
@@ -224,6 +226,7 @@ smtpd_check.o: ../../include/attr.h
 smtpd_check.o: ../../include/mail_addr.h
 smtpd_check.o: smtpd.h
 smtpd_check.o: ../../include/mail_stream.h
+smtpd_check.o: ../../include/pfixtls.h
 smtpd_check.o: smtpd_sasl_glue.h
 smtpd_check.o: smtpd_check.h
 smtpd_peer.o: smtpd_peer.c
@@ -238,6 +241,7 @@ smtpd_peer.o: smtpd.h
 smtpd_peer.o: ../../include/vstream.h
 smtpd_peer.o: ../../include/argv.h
 smtpd_peer.o: ../../include/mail_stream.h
+smtpd_peer.o: ../../include/pfixtls.h
 smtpd_sasl_glue.o: smtpd_sasl_glue.c
 smtpd_sasl_glue.o: ../../include/sys_defs.h
 smtpd_sasl_glue.o: ../../include/msg.h
@@ -294,6 +298,7 @@ smtpd_state.o: smtpd.h
 smtpd_state.o: ../../include/vstring.h
 smtpd_state.o: ../../include/argv.h
 smtpd_state.o: ../../include/mail_stream.h
+smtpd_state.o: ../../include/pfixtls.h
 smtpd_state.o: smtpd_chat.h
 smtpd_state.o: smtpd_sasl_glue.h
 smtpd_token.o: smtpd_token.c
@@ -303,3 +308,4 @@ smtpd_token.o: ../../include/mvect.h
 smtpd_token.o: smtpd_token.h
 smtpd_token.o: ../../include/vstring.h
 smtpd_token.o: ../../include/vbuf.h
+smtpd_token.o: ../../include/pfixtls.h

@@ -247,6 +247,7 @@
 #include <debug_peer.h>
 #include <mail_error.h>
 #include <deliver_pass.h>
+#include <pfixtls.h>
 
 /* Single server skeleton. */
 
@@ -263,6 +264,7 @@
   */
 int     var_smtp_conn_tmout;
 int     var_smtp_helo_tmout;
+int     var_smtp_starttls_tmout;
 int     var_smtp_mail_tmout;
 int     var_smtp_rcpt_tmout;
 int     var_smtp_data0_tmout;
@@ -289,6 +291,12 @@ int     var_smtp_pix_thresh;
 int     var_smtp_pix_delay;
 int     var_smtp_line_limit;
 char   *var_smtp_helo_name;
+int     var_smtp_use_tls;
+int     var_smtp_enforce_tls;
+int     var_smtp_tls_enforce_peername;
+char   *var_smtp_tls_per_site;
+int     var_smtp_tls_scert_vd;
+int     var_smtp_tls_note_starttls_offer;
 
  /*
   * Global variables. smtp_errno is set by the address lookup routines and by
@@ -398,6 +406,7 @@ static void smtp_service(VSTREAM *client_stream, char *unused_service, char **ar
 
 static void pre_init(char *unused_name, char **unused_argv)
 {
+
     debug_peer_init();
 
     if (var_smtp_sasl_enable)
@@ -406,6 +415,14 @@ static void pre_init(char *unused_name, char **unused_argv)
 #else
 	msg_warn("%s is true, but SASL support is not compiled in",
 		 VAR_SMTP_SASL_ENABLE);
+#endif
+    /*
+     * Initialize the TLS data before entering the chroot jail
+     */
+#ifdef HAS_SSL
+    if (var_smtp_use_tls || var_smtp_enforce_tls || var_smtp_tls_per_site[0])
+	pfixtls_init_clientengine(var_smtp_tls_scert_vd);
+    smtp_tls_list_init();
 #endif
 }
 
@@ -442,6 +459,7 @@ int     main(int argc, char **argv)
 	VAR_SMTP_SASL_OPTS, DEF_SMTP_SASL_OPTS, &var_smtp_sasl_opts, 0, 0,
 	VAR_SMTP_BIND_ADDR, DEF_SMTP_BIND_ADDR, &var_smtp_bind_addr, 0, 0,
 	VAR_SMTP_HELO_NAME, DEF_SMTP_HELO_NAME, &var_smtp_helo_name, 1, 0,
+	VAR_SMTP_TLS_PER_SITE, DEF_SMTP_TLS_PER_SITE, &var_smtp_tls_per_site, 0, 0,
 	0,
     };
     static CONFIG_TIME_TABLE time_table[] = {
@@ -455,6 +473,7 @@ int     main(int argc, char **argv)
 	VAR_SMTP_QUIT_TMOUT, DEF_SMTP_QUIT_TMOUT, &var_smtp_quit_tmout, 1, 0,
 	VAR_SMTP_PIX_THRESH, DEF_SMTP_PIX_THRESH, &var_smtp_pix_thresh, 0, 0,
 	VAR_SMTP_PIX_DELAY, DEF_SMTP_PIX_DELAY, &var_smtp_pix_delay, 1, 0,
+	VAR_SMTP_STARTTLS_TMOUT, DEF_SMTP_STARTTLS_TMOUT, &var_smtp_starttls_tmout, 1, 0,
 	0,
     };
     static CONFIG_INT_TABLE int_table[] = {
@@ -470,6 +489,10 @@ int     main(int argc, char **argv)
 	VAR_SMTP_NEVER_EHLO, DEF_SMTP_NEVER_EHLO, &var_smtp_never_ehlo,
 	VAR_SMTP_SASL_ENABLE, DEF_SMTP_SASL_ENABLE, &var_smtp_sasl_enable,
 	VAR_SMTP_RAND_ADDR, DEF_SMTP_RAND_ADDR, &var_smtp_rand_addr,
+	VAR_SMTP_USE_TLS, DEF_SMTP_USE_TLS, &var_smtp_use_tls,
+	VAR_SMTP_ENFORCE_TLS, DEF_SMTP_ENFORCE_TLS, &var_smtp_enforce_tls,
+	VAR_SMTP_TLS_ENFORCE_PN, DEF_SMTP_TLS_ENFORCE_PN, &var_smtp_tls_enforce_peername,
+	VAR_SMTP_TLS_NOTEOFFER, DEF_SMTP_TLS_NOTEOFFER, &var_smtp_tls_note_starttls_offer,
 	0,
     };
 

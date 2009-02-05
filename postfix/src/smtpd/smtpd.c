@@ -356,6 +356,7 @@
 #include <quote_822_local.h>
 #include <lex_822.h>
 #include <namadr_list.h>
+#include <pfixtls.h>
 
 /* Single-threaded server skeleton. */
 
@@ -380,6 +381,7 @@
   */
 int     var_smtpd_rcpt_limit;
 int     var_smtpd_tmout;
+char   *var_relay_ccerts;
 int     var_smtpd_soft_erlim;
 int     var_smtpd_hard_erlim;
 int     var_queue_minfree;		/* XXX use off_t */
@@ -438,6 +440,15 @@ int     var_virt_mailbox_code;
 int     var_relay_rcpt_code;
 char   *var_verp_clients;
 int     var_show_unk_rcpt_table;
+int     var_smtpd_starttls_tmout;
+int     var_smtpd_tls_wrappermode;
+int     var_smtpd_use_tls;
+int     var_smtpd_enforce_tls;
+int     var_smtpd_tls_auth_only;
+int     var_smtpd_tls_ask_ccert;
+int     var_smtpd_tls_req_ccert;
+int     var_smtpd_tls_ccert_vd;
+int     var_smtpd_tls_received_header;
 
 /* Apple Additions */
 bool    var_smtpd_use_pw_server;
@@ -550,29 +561,40 @@ static int ehlo_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
     if (var_disable_vrfy_cmd == 0)
 	smtpd_chat_reply(state, "250-VRFY");
     smtpd_chat_reply(state, "250-ETRN");
+#ifdef HAS_SSL
+    if ((state->tls_use_tls || state->tls_enforce_tls) && (!state->tls_active))
+	smtpd_chat_reply(state, "250-STARTTLS");
+#endif
 
 #ifdef USE_SASL_AUTH
     if ( var_smtpd_sasl_enable )
 	{
-		if ( var_smtpd_use_pw_server )
+#ifdef HAS_SSL
+		if ( !state->tls_auth_only || state->tls_active )
 		{
-			if ( state->pw_server_opts )
+#endif
+			if ( var_smtpd_use_pw_server )
 			{
-				smtpd_chat_reply( state, "250-AUTH%s", state->pw_server_mechanism_list );
-				if ( var_broken_auth_clients )
+				if ( state->pw_server_opts )
 				{
-					smtpd_chat_reply(state, "250-AUTH=%s", (char *)&state->pw_server_mechanism_list[1] );
+					smtpd_chat_reply( state, "250-AUTH%s", state->pw_server_mechanism_list );
+					if ( var_broken_auth_clients )
+					{
+						smtpd_chat_reply(state, "250-AUTH=%s", (char *)&state->pw_server_mechanism_list[1] );
+					}
 				}
 			}
-		}
-		else
-		{
-			smtpd_chat_reply(state, "250-AUTH %s", state->sasl_mechanism_list);
-			if (var_broken_auth_clients)
+			else
 			{
-				smtpd_chat_reply(state, "250-AUTH=%s", state->sasl_mechanism_list);
+				smtpd_chat_reply(state, "250-AUTH %s", state->sasl_mechanism_list);
+				if (var_broken_auth_clients)
+				{
+					smtpd_chat_reply(state, "250-AUTH=%s", state->sasl_mechanism_list);
+				}
 			}
+#ifdef HAS_SSL
 		}
+#endif
 	}
 #endif
     if (namadr_list_match(verp_clients, state->name, state->addr))
@@ -998,12 +1020,77 @@ static void rcpt_reset(SMTPD_STATE *state)
     state->rcpt_count = 0;
 }
 
+/* CN_sanitize - make sure, the CN-string is well behaved */
+
+static void CN_sanitize(char *CNstring)
+{
+    int i;
+    int len;
+    int parencount;
+
+    /*
+     * The information included in the CN (CommonName) of the peer and its
+     * issuer can be included into the Received: header line. The characters
+     * allowed as well as comment nesting are limited by RFC822.
+     */
+
+    len = strlen(CNstring);
+    /*
+     * The Received: header can only contain characters. Make sure that only
+     * acceptable characters are printed. Maybe we could allow more, but
+     * not everything makes sense inside a CommonName.
+     */
+    for (i = 0; i < len; i++) 
+	if (!((CNstring[i] >= 'A') && (CNstring[i] <='Z')) &&
+	    !((CNstring[i] >= 'a') && (CNstring[i] <='z')) &&
+	    !((CNstring[i] >= '0') && (CNstring[i] <='9')) &&
+	    (CNstring[i] != '(') && (CNstring[i] != ')') &&
+	    (CNstring[i] != '[') && (CNstring[i] != ']') &&
+	    (CNstring[i] != '{') && (CNstring[i] != '}') &&
+	    (CNstring[i] != '<') && (CNstring[i] != '>') &&
+	    (CNstring[i] != '?') && (CNstring[i] != '!') &&
+	    (CNstring[i] != ';') && (CNstring[i] != ':') &&
+	    (CNstring[i] != '"') && (CNstring[i] != '\'') &&
+	    (CNstring[i] != '/') && (CNstring[i] != '|') &&
+	    (CNstring[i] != '+') && (CNstring[i] != '&') &&
+	    (CNstring[i] != '~') && (CNstring[i] != '@') &&
+	    (CNstring[i] != '#') && (CNstring[i] != '$') &&
+	    (CNstring[i] != '%') && (CNstring[i] != '&') &&
+	    (CNstring[i] != '^') && (CNstring[i] != '*') &&
+	    (CNstring[i] != '_') && (CNstring[i] != '-') &&
+	    (CNstring[i] != '.') && (CNstring[i] != ' '))
+	    CNstring[i] = '?';
+
+    /*
+     * This information will go into the Received: header inside a comment.
+     * Since comments can be nested, parentheses '(' and ')' must match.
+     */
+    parencount = 0;
+    for (i = 0; i < len; i++) {
+	if (CNstring[i] == '(')
+	    parencount++;
+	else if (CNstring[i] == ')')
+	    parencount--;
+    }
+    /*
+     * The necessary condition is violated. Do YOU know, where to correct?
+     * I don't know, so I will practically remove all parentheses.
+     */
+    if (parencount != 0) {
+	for (i = 0; i < len; i++)
+	    if ((CNstring[i] == '(') || (CNstring[i] == ')'))
+		CNstring[i] = '/';
+    }
+}
+
 /* data_cmd - process DATA command */
 
 static int data_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *unused_argv)
 {
     char   *err;
     char   *start;
+    char   *peer_CN;
+    char   *issuer_CN;
     int     len;
     int     curr_rec_type;
     int     prev_rec_type;
@@ -1047,6 +1134,35 @@ static int data_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *unused_argv)
 		"Received: from %s (%s [%s])",
 		state->helo_name ? state->helo_name : state->name,
 		state->name, state->addr);
+    if (var_smtpd_tls_received_header && state->tls_active) {
+	rec_fprintf(state->cleanup, REC_TYPE_NORM,
+		    "\t(using %s with cipher %s (%d/%d bits))",
+		    state->tls_info.protocol, state->tls_info.cipher_name,
+		    state->tls_info.cipher_usebits,
+		    state->tls_info.cipher_algbits);
+	if (state->tls_info.peer_CN) {
+            peer_CN = mystrdup(state->tls_info.peer_CN);
+	    CN_sanitize(peer_CN);
+            issuer_CN = mystrdup(state->tls_info.issuer_CN);
+	    CN_sanitize(issuer_CN);
+	    if (state->tls_info.peer_verified)
+		rec_fprintf(state->cleanup, REC_TYPE_NORM,
+			"\t(Client CN \"%s\", Issuer \"%s\" (verified OK))",
+			peer_CN, issuer_CN);
+	    else
+		rec_fprintf(state->cleanup, REC_TYPE_NORM,
+			"\t(Client CN \"%s\", Issuer \"%s\" (not verified))",
+			peer_CN, issuer_CN);
+	    myfree(issuer_CN);
+	    myfree(peer_CN);
+	}
+	else if (var_smtpd_tls_ask_ccert)
+	    rec_fprintf(state->cleanup, REC_TYPE_NORM,
+			"\t(Client did not present a certificate)");
+	else
+	    rec_fprintf(state->cleanup, REC_TYPE_NORM,
+			"\t(No client certificate requested)");
+    }
     if (state->rcpt_count == 1 && state->recipient) {
 	rec_fprintf(state->cleanup, REC_TYPE_NORM,
 		    "\tby %s (%s) with %s id %s",
@@ -1397,6 +1513,77 @@ static void chat_reset(SMTPD_STATE *state, int threshold)
     }
 }
 
+static int starttls_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
+{
+    char   *err;
+
+#ifdef HAS_SSL
+    if (argc != 1) {
+	state->error_mask |= MAIL_ERROR_PROTOCOL;
+	smtpd_chat_reply(state, "501 Syntax: STARTTLS");
+	return (-1);
+    }
+    if (state->tls_active != 0) {
+	state->error_mask |= MAIL_ERROR_PROTOCOL;
+	smtpd_chat_reply(state, "554 Error: TLS already active");
+	return (-1);
+    }
+    if (state->tls_use_tls == 0) {
+	state->error_mask |= MAIL_ERROR_PROTOCOL;
+	smtpd_chat_reply(state, "502 Error: command not implemented");
+	return (-1);
+    }
+    if (!pfixtls_serverengine) {
+	smtpd_chat_reply(state, "454 TLS not available due to temporary reason");
+	return (0);
+    }
+    smtpd_chat_reply(state, "220 Ready to start TLS");
+    vstream_fflush(state->client);
+    /*
+     * When deciding about continuing the handshake, we will stop when a
+     * client certificate was _required_ and none was presented or the
+     * verification failed. This however does only make sense when TLS is
+     * enforced. Otherwise we would happily perform perform the SMTP
+     * transaction without any STARTTLS at all! So only have the handshake
+     * fail when TLS is also enforced.
+     */
+    if (pfixtls_start_servertls(state->client, var_smtpd_starttls_tmout,
+				state->name, state->addr, &(state->tls_info),
+			(var_smtpd_tls_req_ccert && state->tls_enforce_tls))) {
+	/*
+         * Typically the connection is hanging at this point, so
+         * we should try to shut it down by force! Unfortunately this
+         * problem is not addressed in postfix!
+         */
+	return (-1);
+    }
+    state->tls_active = 1;
+    helo_reset(state);
+    mail_reset(state);
+    rcpt_reset(state);
+    return (0);
+#else
+    state->error_mask |= MAIL_ERROR_PROTOCOL;
+    smtpd_chat_reply(state, "502 Error: command not implemented");
+    return (-1);
+#endif
+}
+
+static void tls_reset(SMTPD_STATE *state)
+{
+    int failure = 0;
+
+    if (state->reason && state->where && strcmp(state->where, SMTPD_AFTER_DOT))
+	failure = 1;
+#ifdef HAS_SSL
+    vstream_fflush(state->client);
+    if (state->tls_active)
+	pfixtls_stop_servertls(state->client, var_smtpd_starttls_tmout,
+			       failure, &(state->tls_info));
+#endif
+    state->tls_active = 0;
+}
+
  /*
   * The table of all SMTP commands that we know. Set the junk limit flag on
   * any command that can be repeated an arbitrary number of times without
@@ -1414,6 +1601,10 @@ typedef struct SMTPD_CMD {
 static SMTPD_CMD smtpd_cmd_table[] = {
     "HELO", helo_cmd, SMTPD_CMD_FLAG_LIMIT,
     "EHLO", ehlo_cmd, SMTPD_CMD_FLAG_LIMIT,
+
+#ifdef HAS_SSL
+    "STARTTLS", starttls_cmd, 0,
+#endif
 
 #ifdef USE_SASL_AUTH
     "AUTH", smtpd_sasl_auth_cmd, 0,
@@ -1532,9 +1723,28 @@ static void smtpd_proto(SMTPD_STATE *state)
 		state->error_count++;
 		continue;
 	    }
-	    state->where = cmdp->name;
-	    if (cmdp->action(state, argc, argv) != 0)
+	    if (state->tls_enforce_tls &&
+		!state->tls_active &&
+		cmdp->action != starttls_cmd &&
+		cmdp->action != noop_cmd &&
+		cmdp->action != ehlo_cmd &&
+		cmdp->action != quit_cmd) {
+		smtpd_chat_reply(state,
+				 "530 Must issue a STARTTLS command first");
 		state->error_count++;
+		continue;
+	    }
+	    state->where = cmdp->name;
+	    if (cmdp->action(state, argc, argv) != 0) {
+		state->error_count++;
+		/*
+		 * Die after TLS negotiation failure, as there is no
+		 * stable way to recover from a possible mixture of
+		 * TLS and SMTP protocol from the client.
+		 */
+		if (cmdp->action == starttls_cmd)
+		    break;
+	    }
 	    if ((cmdp->flags & SMTPD_CMD_FLAG_LIMIT)
 		&& state->junk_cmds++ > var_smtpd_junk_cmd_limit)
 		state->error_count++;
@@ -1560,6 +1770,7 @@ static void smtpd_proto(SMTPD_STATE *state)
      * Cleanup whatever information the client gave us during the SMTP
      * dialog.
      */
+    tls_reset(state);
     helo_reset(state);
 #ifdef USE_SASL_AUTH
     if (var_smtpd_sasl_enable)
@@ -1592,6 +1803,44 @@ static void smtpd_service(VSTREAM *stream, char *unused_service, char **argv)
      * machines.
      */
     smtpd_state_init(&state, stream);
+
+#ifdef HAS_SSL
+    if (SMTPD_STAND_ALONE((&state))) {
+	state.tls_use_tls = 0;
+	state.tls_enforce_tls = 0;
+	state.tls_auth_only = 0;
+    }
+    else {
+	state.tls_use_tls = var_smtpd_use_tls | var_smtpd_enforce_tls;
+	state.tls_enforce_tls = var_smtpd_enforce_tls;
+	if (var_smtpd_tls_wrappermode) {
+	    /*
+	     * TLS has been set to wrapper mode, meaning that we run on a
+	     * seperate port and we must switch to TLS layer before actually
+	     * performing the SMTP protocol. This implies enforce-mode.
+	     */
+	    state.tls_use_tls = state.tls_enforce_tls = 1;
+	    if (pfixtls_start_servertls(state.client, var_smtpd_starttls_tmout,
+					state.name, state.addr, &state.tls_info,
+					var_smtpd_tls_req_ccert)) {
+	    /*
+	     * Typically the connection is hanging at this point, so
+	     * we should try to shut it down by force! Unfortunately this
+	     * problem is not addressed in postfix!
+	     */
+		return;
+	    }
+	    state.tls_active = 1;
+	}
+	if (var_smtpd_tls_auth_only || state.tls_enforce_tls)
+	    state.tls_auth_only = 1;
+    }
+#else
+    state.tls_use_tls = 0;
+    state.tls_enforce_tls = 0;
+    state.tls_auth_only = 0;
+#endif
+
     msg_info("connect from %s[%s]", state.name, state.addr);
 
     /*
@@ -1627,7 +1876,6 @@ static void pre_accept(char *unused_name, char **unused_argv)
 
 static void pre_jail_init(char *unused_name, char **unused_argv)
 {
-
     /*
      * Initialize blacklist/etc. patterns before entering the chroot jail, in
      * case they specify a filename pattern.
@@ -1644,6 +1892,20 @@ static void pre_jail_init(char *unused_name, char **unused_argv)
 #else
 	msg_warn("%s is true, but SASL support is not compiled in",
 		 VAR_SMTPD_SASL_ENABLE);
+#endif
+
+#ifdef HAS_SSL
+    /*
+     * Keys can only be loaded when running with superuser permissions.
+     * When called from "sendmail -bs" this is not the case, but STARTTLS
+     * is not used in this scenario anyhow.
+     */
+    if (geteuid() == 0) {
+      if (var_smtpd_use_tls || var_smtpd_enforce_tls
+	  || var_smtpd_tls_wrappermode)
+	pfixtls_init_serverengine(var_smtpd_tls_ccert_vd,
+				  var_smtpd_tls_ask_ccert);
+    }
 #endif
 }
 
@@ -1672,6 +1934,7 @@ int     main(int argc, char **argv)
 	VAR_VIRT_ALIAS_CODE, DEF_VIRT_ALIAS_CODE, &var_virt_alias_code, 0, 0,
 	VAR_VIRT_MAILBOX_CODE, DEF_VIRT_MAILBOX_CODE, &var_virt_mailbox_code, 0, 0,
 	VAR_RELAY_RCPT_CODE, DEF_RELAY_RCPT_CODE, &var_relay_rcpt_code, 0, 0,
+	VAR_SMTPD_TLS_CCERT_VD, DEF_SMTPD_TLS_CCERT_VD, &var_smtpd_tls_ccert_vd, 0, 0,
 	0,
     };
     static CONFIG_TIME_TABLE time_table[] = {
@@ -1688,6 +1951,13 @@ int     main(int argc, char **argv)
 	VAR_SMTPD_SASL_ENABLE, DEF_SMTPD_SASL_ENABLE, &var_smtpd_sasl_enable,
 	VAR_BROKEN_AUTH_CLNTS, DEF_BROKEN_AUTH_CLNTS, &var_broken_auth_clients,
 	VAR_SHOW_UNK_RCPT_TABLE, DEF_SHOW_UNK_RCPT_TABLE, &var_show_unk_rcpt_table,
+	VAR_SMTPD_TLS_WRAPPER, DEF_SMTPD_TLS_WRAPPER, &var_smtpd_tls_wrappermode,
+	VAR_SMTPD_USE_TLS, DEF_SMTPD_USE_TLS, &var_smtpd_use_tls,
+	VAR_SMTPD_ENFORCE_TLS, DEF_SMTPD_ENFORCE_TLS, &var_smtpd_enforce_tls,
+	VAR_SMTPD_TLS_AUTH_ONLY, DEF_SMTPD_TLS_AUTH_ONLY, &var_smtpd_tls_auth_only,
+	VAR_SMTPD_TLS_ACERT, DEF_SMTPD_TLS_ACERT, &var_smtpd_tls_ask_ccert,
+	VAR_SMTPD_TLS_RCERT, DEF_SMTPD_TLS_RCERT, &var_smtpd_tls_req_ccert,
+	VAR_SMTPD_TLS_RECHEAD, DEF_SMTPD_TLS_RECHEAD, &var_smtpd_tls_received_header,
 	VAR_SMTPD_USE_PW_SERVER, DEV_SMTPD_USE_PW_SERVER, &var_smtpd_use_pw_server,
 	0,
     };
@@ -1720,6 +1990,7 @@ int     main(int argc, char **argv)
 	VAR_SMTPD_NULL_KEY, DEF_SMTPD_NULL_KEY, &var_smtpd_null_key, 0, 0,
 	VAR_RELAY_RCPT_MAPS, DEF_RELAY_RCPT_MAPS, &var_relay_rcpt_maps, 0, 0,
 	VAR_VERP_CLIENTS, DEF_VERP_CLIENTS, &var_verp_clients, 0, 0,
+	VAR_RELAY_CCERTS, DEF_RELAY_CCERTS, &var_relay_ccerts, 0, 0,
 	VAR_SMTPD_PW_SERVER_OPTS, DEF_SMTPD_PW_SERVER_OPTS, &var_smtpd_pw_server_opts, 0, 0,
 	0,
     };
@@ -1742,3 +2013,4 @@ int     main(int argc, char **argv)
 		       MAIL_SERVER_PRE_ACCEPT, pre_accept,
 		       0);
 }
+

@@ -32,6 +32,7 @@
   * Global library.
   */
 #include <mail_stream.h>
+#include <pfixtls.h>
 
  /*
   * Variables that keep track of conversation state. There is only one SMTP
@@ -98,6 +99,11 @@ typedef struct SMTPD_STATE {
     int     defer_if_permit_sender;	/* force permit into warning */
     int     discard;			/* discard message */
     VSTRING *expand_buf;		/* scratch space for $name expansion */
+    int     tls_active;
+    int     tls_use_tls;
+    int     tls_enforce_tls;
+    int     tls_auth_only;
+    tls_info_t tls_info;
 } SMTPD_STATE;
 
 extern void smtpd_state_init(SMTPD_STATE *, VSTREAM *);

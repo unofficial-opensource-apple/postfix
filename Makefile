@@ -30,17 +30,20 @@ installsrc :
 
 build :
 	echo "ENV = $(ENV)"
-	$(ENV) $(MAKE) -C $(SRCROOT)/$(PROJECT) makefiles OPT="-DBIND_8_COMPAT $(RC_CFLAGS)"
+	$(ENV) $(MAKE) -C $(SRCROOT)/$(PROJECT) makefiles OPT="-DBIND_8_COMPAT -DHAS_SSL -DUSE_SASL_AUTH -I/AppleInternal/Developer/Headers/sasl -framework DirectoryService $(RC_CFLAGS)" AUXLIBS="-L/usr/lib -lssl -lsasl2.2.0.1 -lgssapi_krb5"
 	$(ENV) $(MAKE) -C $(SRCROOT)/$(PROJECT)
+	cc -O watchpostfix.c -o postfix-watch
 
 install : pre-install
 	install -d -m 755 $(DSTROOT)/System/Library/StartupItems/Postfix
 	install -d -m 755 $(DSTROOT)/usr/libexec/postfix/scripts
+	install -s -m 755 postfix-watch $(DSTROOT)/usr/sbin/postfix-watch
 	rsync -a $(SRCROOT)/Postfix.StartupItem/ \
 		 $(DSTROOT)/System/Library/StartupItems/Postfix
 	cp $(SRCROOT)/mta_select $(DSTROOT)/usr/libexec/postfix
 	cp $(SRCROOT)/aliases.db $(DSTROOT)/private/etc
 	ln -s postfix/aliases $(DSTROOT)/private/etc
+	install -m 0444 $(SRCROOT)/master.cf.defaultserver $(DSTROOT)/private/etc/postfix
 
 pre-install : build
 	cd $(PROJECT)/$(SRCDIR) && \

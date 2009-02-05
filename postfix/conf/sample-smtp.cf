@@ -189,6 +189,14 @@ smtp_connect_timeout = 30s
 #
 smtp_helo_timeout = 300s
 
+# The smtp_starttls_timeout parameter limits the time in seconds to write and
+# read operations during TLS start and stop handhake procedures.
+#
+# In case of problems the client does NOT try the next address on
+# the mail exchanger list.
+#
+# smtp_starttls_timeout = 300s
+
 # The smtp_mail_timeout parameter specifies the SMTP client timeout
 # for sending the SMTP MAIL FROM command, and for receiving the server
 # response.

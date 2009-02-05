@@ -191,6 +191,11 @@ smtpd_timeout = 300s
 #
 strict_rfc821_envelopes = no
 
+# The smtpd_starttls_timeout parameter limits the time in seconds to write and
+# read operations during TLS start and stop handhake procedures.
+#
+# smtpd_starttls_timeout = 300s
+
 #
 # TARPIT CONTROLS
 #

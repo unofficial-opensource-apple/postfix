@@ -114,6 +114,8 @@
 char   *var_always_bcc;
 char   *var_filter_xport;
 
+static time_t last_mod_time = 0;
+
  /*
   * Structure to bundle a bunch of information about a queue file.
   */
@@ -178,6 +180,8 @@ static int copy_segment(VSTREAM *qfile, VSTREAM *cleanup, PICKUP_INFO *info,
 	if ((type = rec_get(qfile, buf, var_line_limit)) < 0
 	    || strchr(expected, type) == 0)
 	    return (file_read_error(info, type));
+	if (msg_verbose)
+	    msg_info("%s: read %c %s", info->id, type, vstring_str(buf));
 	if (type == *expected)
 	    break;
 	if (type == REC_TYPE_FROM)
@@ -193,6 +197,8 @@ static int copy_segment(VSTREAM *qfile, VSTREAM *cleanup, PICKUP_INFO *info,
 	    if (info->rcpt == 0)
 		info->rcpt = mystrdup(vstring_str(buf));
 	if (type == REC_TYPE_TIME)
+	    continue;
+	if (type == REC_TYPE_SIZE)
 	    continue;
 	if (type == REC_TYPE_ATTR) {
 	    if ((error_text = split_nameval(vstring_str(buf), &attr_name,
@@ -474,6 +480,16 @@ static void pickup_service(char *unused_buf, int unused_len,
      * files from it.
      */
     queue_name = MAIL_QUEUE_MAILDROP;		/* XXX should be a list */
+
+	struct stat sb;
+	if ( !stat( queue_name, &sb ) ) 
+	{
+		if ( sb.st_mtime == last_mod_time ) 
+			return; 
+
+		last_mod_time = sb.st_mtime;
+	}
+
     do {
 	file_count = 0;
 	scan = scan_dir_open(queue_name);

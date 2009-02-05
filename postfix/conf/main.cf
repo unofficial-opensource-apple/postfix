@@ -632,10 +632,17 @@ sample_directory =
 #
 readme_directory =
 
-# THE FOLLOWING DEFAULTS ARE SET BY APPLE - CHANGE AS DESIRED
+# THE FOLLOWING DEFAULTS ARE SET BY APPLE
 #
 # bind to localhost only
-inet_interfaces = localhost
 #
+inet_interfaces = localhost
+
 # turn off relaying for local subnet
+#
 mynetworks_style = host
+
+# mydomain_fallback: optional domain to use if mydomain is not set and
+# myhostname is not fully qualified.  It is ignored if neither are true.
+#
+mydomain_fallback = localhost

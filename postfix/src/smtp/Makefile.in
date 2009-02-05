@@ -84,6 +84,7 @@ smtp.o: ../../include/mail_proto.h
 smtp.o: ../../include/iostuff.h
 smtp.o: ../../include/attr.h
 smtp.o: ../../include/mail_server.h
+smtp.o: ../../include/pfixtls.h
 smtp.o: smtp.h
 smtp.o: smtp_sasl.h
 smtp_addr.o: smtp_addr.c
@@ -103,6 +104,7 @@ smtp_addr.o: ../../include/vstream.h
 smtp_addr.o: ../../include/argv.h
 smtp_addr.o: ../../include/deliver_request.h
 smtp_addr.o: ../../include/recipient_list.h
+smtp_addr.o: ../../include/pfixtls.h
 smtp_addr.o: smtp_addr.h
 smtp_chat.o: smtp_chat.c
 smtp_chat.o: ../../include/sys_defs.h
@@ -123,6 +125,7 @@ smtp_chat.o: ../../include/post_mail.h
 smtp_chat.o: ../../include/cleanup_user.h
 smtp_chat.o: ../../include/mail_error.h
 smtp_chat.o: ../../include/name_mask.h
+smtp_chat.o: ../../include/pfixtls.h
 smtp_chat.o: smtp.h
 smtp_connect.o: smtp_connect.c
 smtp_connect.o: ../../include/sys_defs.h
@@ -144,6 +147,7 @@ smtp_connect.o: smtp.h
 smtp_connect.o: ../../include/argv.h
 smtp_connect.o: ../../include/deliver_request.h
 smtp_connect.o: ../../include/recipient_list.h
+smtp_connetc.o: ../../include/pfixtls.h
 smtp_connect.o: smtp_addr.h
 smtp_proto.o: smtp_proto.c
 smtp_proto.o: ../../include/sys_defs.h
@@ -175,6 +179,7 @@ smtp_proto.o: ../../include/mail_proto.h
 smtp_proto.o: ../../include/attr.h
 smtp_proto.o: ../../include/mime_state.h
 smtp_proto.o: ../../include/header_opts.h
+smtp_proto.o: ../../include/pfixtls.h
 smtp_proto.o: smtp.h
 smtp_proto.o: ../../include/argv.h
 smtp_proto.o: smtp_sasl.h
@@ -220,9 +225,12 @@ smtp_session.o: ../../include/vbuf.h
 smtp_session.o: ../../include/stringops.h
 smtp_session.o: ../../include/vstring.h
 smtp_session.o: smtp.h
+smtp_session.o: ../../include/mail_params.h
+smtp_session.o: ../../include/pfixtls.h
 smtp_session.o: ../../include/argv.h
 smtp_session.o: ../../include/deliver_request.h
 smtp_session.o: ../../include/recipient_list.h
+smtp_session.o: ../../include/maps.h
 smtp_state.o: smtp_state.c
 smtp_state.o: ../../include/sys_defs.h
 smtp_state.o: ../../include/mymalloc.h
@@ -236,6 +244,7 @@ smtp_state.o: smtp.h
 smtp_state.o: ../../include/argv.h
 smtp_state.o: ../../include/deliver_request.h
 smtp_state.o: ../../include/recipient_list.h
+smtp_state.o: ../../include/pfixtls.h
 smtp_state.o: smtp_sasl.h
 smtp_trouble.o: smtp_trouble.c
 smtp_trouble.o: ../../include/sys_defs.h
@@ -255,6 +264,7 @@ smtp_trouble.o: ../../include/mail_error.h
 smtp_trouble.o: ../../include/name_mask.h
 smtp_trouble.o: smtp.h
 smtp_trouble.o: ../../include/argv.h
+smtp_trouble.o: ../../include/pfixtls.h
 smtp_unalias.o: smtp_unalias.c
 smtp_unalias.o: ../../include/sys_defs.h
 smtp_unalias.o: ../../include/htable.h
@@ -267,3 +277,4 @@ smtp_unalias.o: ../../include/vstream.h
 smtp_unalias.o: ../../include/argv.h
 smtp_unalias.o: ../../include/deliver_request.h
 smtp_unalias.o: ../../include/recipient_list.h
+smtp_unalias.o: ../../include/pfixtls.h

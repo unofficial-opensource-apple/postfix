@@ -128,6 +128,13 @@ int     smtpd_sasl_auth_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
 	smtpd_chat_reply(state, "503 Error: authentication not enabled");
 	return (-1);
     }
+#ifdef HAS_SSL
+    if (state->tls_auth_only && !state->tls_active) {
+	state->error_mask |= MAIL_ERROR_PROTOCOL;
+	smtpd_chat_reply(state, "538 Encryption required for requested authentication mechanism");
+	return (-1);
+    }
+#endif
     if (state->sasl_username) {
 	state->error_mask |= MAIL_ERROR_PROTOCOL;
 	smtpd_chat_reply(state, "503 Error: already authenticated");

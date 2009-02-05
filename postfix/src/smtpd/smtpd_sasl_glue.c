@@ -84,6 +84,9 @@
 #include <sys_defs.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 /* Utility library. */
 
@@ -109,10 +112,20 @@
 #include <DirectoryService/DirServicesUtils.h>
 #include <DirectoryService/DirServicesConst.h>
 
+#include <CoreFoundation/CFData.h>
+#include <CoreFoundation/CFString.h>
+#include <CoreFoundation/CFNumber.h>
+#include <CoreFoundation/CFPropertyList.h>
+
+/* kerberos */
+
+#include <Kerberos/Kerberos.h>
+#include <Kerberos/gssapi_krb5.h>
+#include <Kerberos/gssapi.h>
+
 /* mach */
 
 #include <mach/boolean.h>
-
 
 #ifdef USE_SASL_AUTH
 
@@ -212,6 +225,8 @@ static NAME_MASK smtpd_sasl_mask[] = {
     0,
 };
 
+void log_errors ( char *inName, OM_uint32 inMajor, OM_uint32 inMinor );
+
 static int smtpd_sasl_opts;
 
 /* Apple's Password Server */
@@ -290,7 +305,7 @@ void    smtpd_sasl_connect(SMTPD_STATE *state)
     state->pw_server_enabled		= var_smtpd_use_pw_server;
     state->pw_server_mechanism_list	= 0;
 	state->pw_server_opts			= 0;
-    
+
 	if ( smtpd_pw_server_sasl_opts )
 	{
 		state->pw_server_mechanism_list = malloc( 64 );
@@ -588,12 +603,19 @@ static tDirStatus	sOpen_user_node		( tDirReference inDirRef, const char *inUserL
 static int			sValidateResponse	( const char *inUserID, const char *inChallenge, const char *inResponse, const char *inAuthType );
 static int			sDoCryptAuth		( tDirReference inDirRef, tDirNodeReference inUserNodeRef, const char *inUserID, const char *inPasswd );
 static int			sEncodeBase64		( const char *inStr, const int inLen, char *outStr, int outLen );
-static int			sDecodeBase64		( const char *inStr, const int inLen, char *outStr, int outLen );
+static int			sDecodeBase64		( const char *inStr, const int inLen, char *outStr, int outLen, int *destLen );
 static int			sClearTextCrypt		( const char *inUserID, const char *inPasswd );
+static int			gss_Init			( void );
+static int			get_principal_str	( char *inOutBuf, int inSize );
+static int			get_realm_form_creds( char *inBuffer, int inSize );
+static char *		get_server_principal( void );
+static OM_uint32	display_name		( const gss_name_t principalName );
 
 #define	MAX_USER_BUF_SIZE		512
 #define	MAX_CHAL_BUF_SIZE		2048
 #define	MAX_IO_BUF_SIZE			21848
+
+static	gss_cred_id_t	stCredentials;
 
 #include <sys/param.h>
 
@@ -608,6 +630,7 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 {
 	const char *host_name	= NULL;
 	char	   *ptr			= NULL;
+	int			respLen		= 0;
     char	   *myname		= "smtpd_pw_server_authenticate";
     unsigned	len			= 0;
 	char		user[ MAX_USER_BUF_SIZE ];
@@ -640,7 +663,10 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 		/* get the user name and decode it */
 		smtpd_chat_query( state );
 		len = VSTRING_LEN( state->buffer );
-		sDecodeBase64( vstring_str( state->buffer ), len, user, MAX_USER_BUF_SIZE );
+		if ( sDecodeBase64( vstring_str( state->buffer ), len, user, MAX_USER_BUF_SIZE, &respLen ) != 0 )
+		{
+			return ( "501 Authentication failed: malformed initial response" );
+		}
 
 		/* has the client given up */
 		if ( strcmp(vstring_str( state->buffer ), "*") == 0 )
@@ -656,13 +682,16 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 		/* get the password */
 		smtpd_chat_query( state );
 		len = VSTRING_LEN( state->buffer );
-		sDecodeBase64( vstring_str( state->buffer ), len, passwd, MAX_USER_BUF_SIZE );
+		if ( sDecodeBase64( vstring_str( state->buffer ), len, passwd, MAX_USER_BUF_SIZE, &respLen ) != 0 )
+		{
+			return ( "501 Authentication failed: malformed response" );
+		}
 
 		/* do the auth */
 		if ( sClearTextCrypt( user, passwd ) == eAODNoErr )
 		{
 			state->sasl_username = mystrdup( user );
-			state->sasl_method = mystrdup( passwd );
+			state->sasl_method = mystrdup(sasl_method);
 
 			return( 0 );
 		}
@@ -680,8 +709,15 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 		}
 
 		/* decode the initial response */
+		if ( init_response == NULL )
+		{
+			return ( "501 Authentication failed: malformed initial response" );
+		}
 		len = strlen( init_response );
-		sDecodeBase64( init_response, len, resp, MAX_USER_BUF_SIZE );
+		if ( sDecodeBase64( init_response, len, resp, MAX_USER_BUF_SIZE, &respLen ) != 0 )
+		{
+			return ( "501 Authentication failed: malformed initial response" );
+		}
 
 		ptr = resp;
 		if ( *ptr == NULL )
@@ -707,7 +743,7 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 						if ( sClearTextCrypt( user, passwd ) == eAODNoErr )
 						{
 							state->sasl_username = mystrdup( user );
-							state->sasl_method = mystrdup( passwd );
+							state->sasl_method = mystrdup(sasl_method);
 		
 							return( 0 );
 						}
@@ -749,7 +785,10 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 
 		/* decode the response */
 		len = VSTRING_LEN( state->buffer );
-		sDecodeBase64( vstring_str( state->buffer ), len, resp, MAX_IO_BUF_SIZE );
+		if ( sDecodeBase64( vstring_str( state->buffer ), len, resp, MAX_IO_BUF_SIZE, &respLen ) != 0 )
+		{
+			return ( "501 Authentication failed: malformed initial response" );
+		}
 
 		/* get the user name */
 		ptr = strchr( resp, ' ' );
@@ -769,7 +808,7 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 					if ( sValidateResponse( user, chal, ptr, kDSStdAuthCRAM_MD5 ) == eAODNoErr )
 					{
 						state->sasl_username = mystrdup( user );
-						state->sasl_method = mystrdup( passwd );
+						state->sasl_method = mystrdup(sasl_method);
 	
 						return( 0 );
 					}
@@ -781,18 +820,363 @@ char *smtpd_pw_server_authenticate (	SMTPD_STATE *state,
 	}
 	else if ( strcasecmp( sasl_method, "GSSAPI" ) == 0 )
 	{
+		int				r		= ODA_AUTH_FAILED;
+		char			principalBuf[ 256 ];
+		gss_buffer_desc	in_token;
+		gss_buffer_desc	out_token;
+		OM_uint32		minStatus	= 0;
+		OM_uint32		majStatus	= 0;
+		OM_uint32		ret_flags	= 0;
+		gss_ctx_id_t	context		= GSS_C_NO_CONTEXT;
+		gss_OID			mechTypes;
+		gss_name_t		clientName;
+		unsigned long	maxsize		= htonl( MAX_IO_BUF_SIZE );
+
 		/* is Kerberos V5 enabled */
 		if ( !(state->pw_server_opts & PW_SERVER_GSSAPI) )
 		{
 			return ( "504 Authentication method not enabled" );
 		}
 
-		/* XXX - may use SASL Kerberos plug-in for this */
+		if ( gss_Init() == GSS_S_COMPLETE )
+		{
+			if ( init_response == NULL )
+			{
+				smtpd_chat_reply( state, "334 " );
+				smtpd_chat_query( state );
+	
+				/* check if client cancelled */
+				if ( strcmp( vstring_str( state->buffer ), "*" ) == 0 )
+				{
+					return ( "501 Authentication aborted" );
+				}
+
+				/* clear response buffer */
+				memset( resp, 0, MAX_IO_BUF_SIZE );
+	
+				/* decode the response */
+				len = VSTRING_LEN( state->buffer );
+				if ( sDecodeBase64( vstring_str( state->buffer ), len, resp, MAX_IO_BUF_SIZE, &respLen ) != 0 )
+				{
+					return ( "501 Authentication failed: malformed initial response" );
+				}
+			}
+			else
+			{
+				/* clear response buffer */
+				memset( resp, 0, MAX_IO_BUF_SIZE );
+
+				len = strlen( init_response );
+				if ( sDecodeBase64( init_response, len, resp, MAX_IO_BUF_SIZE, &respLen ) != 0 )
+				{
+					return ( "501 Authentication failed: malformed initial response" );
+				}
+			}
+
+			in_token.value  = resp;
+			in_token.length = respLen;
+
+			do {
+				/* negotiate authentication */
+				majStatus = gss_accept_sec_context(	&minStatus,
+													&context,
+													stCredentials,
+													&in_token,
+													GSS_C_NO_CHANNEL_BINDINGS,
+													&clientName,
+													NULL, /* &mechTypes */
+													&out_token,
+													&ret_flags,
+													NULL,	/* ignore time?*/
+													NULL );
+		
+				switch ( majStatus )
+				{
+					case GSS_S_COMPLETE:			/* successful */
+					case GSS_S_CONTINUE_NEEDED:		/* continue */
+					{
+						if ( out_token.value )
+						{
+							/* Encode the challenge and send it */
+							memset( resp, 0, MAX_IO_BUF_SIZE );
+							sEncodeBase64( (char *)out_token.value, out_token.length, resp, MAX_IO_BUF_SIZE );
+
+							smtpd_chat_reply( state, "334 %s", resp );
+							smtpd_chat_query( state );
+			
+							/* check if client cancelled */
+							if ( strcmp( vstring_str( state->buffer ), "*" ) == 0 )
+							{
+								return ( "501 Authentication aborted" );
+							}
+		
+							/* decode the response */
+							memset( resp, 0, MAX_IO_BUF_SIZE );
+							len = VSTRING_LEN( state->buffer );
+							if ( len != 0 )
+							{
+								if ( sDecodeBase64( vstring_str( state->buffer ), len, resp, MAX_IO_BUF_SIZE, &respLen ) != 0 )
+								{
+									return ( "501 Authentication failed: malformed response" );
+								}
+							}
+							in_token.value  = resp;
+							in_token.length = respLen;
+		
+							gss_release_buffer( &minStatus, &out_token );
+						}
+						break;
+					}
+		
+					default:
+						log_errors( "gss_accept_sec_context", majStatus, minStatus );
+						break;
+				}
+			} while ( in_token.value && in_token.length && (majStatus == GSS_S_CONTINUE_NEEDED) );
+
+			if ( majStatus == GSS_S_COMPLETE )
+			{
+				gss_buffer_desc		inToken;
+				gss_buffer_desc		outToken;
+
+				memcpy( passwd, (void *)&maxsize, 4 );
+				inToken.value	= passwd;
+				inToken.length	= 4;
+
+				passwd[ 0 ] = 1;
+	
+				majStatus = gss_wrap( &minStatus, context, 0, GSS_C_QOP_DEFAULT, &inToken, NULL, &outToken );
+				if ( majStatus == GSS_S_COMPLETE )
+				{
+					/* Encode the challenge and send it */
+					sEncodeBase64( (char *)outToken.value, outToken.length, resp, MAX_IO_BUF_SIZE );
+
+					smtpd_chat_reply( state, "334 %s", resp );
+					smtpd_chat_query( state );
+	
+					/* check if client cancelled */
+					if ( strcmp( vstring_str( state->buffer ), "*" ) == 0 )
+					{
+						return ( "501 Authentication aborted" );
+					}
+
+					/* Decode the response */
+					memset( resp, 0, MAX_IO_BUF_SIZE );
+					len = VSTRING_LEN( state->buffer );
+					if ( sDecodeBase64( vstring_str( state->buffer ), len, resp, MAX_IO_BUF_SIZE, &respLen ) != 0 )
+					{
+						return ( "501 Authentication failed: malformed response" );
+					}
+
+					inToken.value  = resp;
+					inToken.length = respLen;
+	
+					gss_release_buffer( &minStatus, &outToken );
+	
+					majStatus = gss_unwrap( &minStatus, context, &inToken, &outToken, NULL, NULL );
+					if ( majStatus == GSS_S_COMPLETE )
+					{
+						if ( (outToken.value != NULL)		&&
+							(outToken.length > 4)			&&
+							(outToken.length < MAX_USER_BUF_SIZE) )
+						{
+							memcpy( user, outToken.value, outToken.length );
+							if ( user[0] & 1 )
+							{
+								user[ outToken.length ] = '\0';
+								state->sasl_username = mystrdup( user + 4 );
+								state->sasl_method = mystrdup(sasl_method);
+
+								return( 0 );
+							}
+						}
+					}
+					else
+					{
+						log_errors( "gss_unwrap", majStatus, minStatus );
+					}
+	
+					gss_release_buffer( &minStatus, &outToken );
+				}
+				else
+				{
+					log_errors( "gss_wrap", majStatus, minStatus );
+				}
+			}
+		}
+		return ( "504 Authentication failed" );
 	}
 
 	return ( "504 Unsupported authentication method" );
 
 } /* smtpd_pw_server_authenticate */
+
+
+/* -----------------------------------------------------------
+ *	gss_Init ()
+ * ----------------------------------------------------------- */
+
+int gss_Init ( void )
+{
+	int					iResult		= GSS_S_COMPLETE;
+	char			   *pService	= NULL;
+	gss_buffer_desc		nameToken;
+	gss_name_t			principalName;
+	gss_OID				mechid;
+	OM_uint32			majStatus	= 0;
+	OM_uint32			minStatus	= 0;
+
+	pService = get_server_principal();
+	if ( pService == NULL )
+	{
+		syslog( LOG_ERR, "No service principal found" );
+		return( GSS_S_NO_CRED );
+	}
+
+	nameToken.value		= pService;
+	nameToken.length	= strlen( pService );
+
+	majStatus = gss_import_name( &minStatus, 
+									&nameToken, 
+									GSS_KRB5_NT_PRINCIPAL_NAME,	 //gss_nt_service_name
+									&principalName );
+
+	if ( majStatus != GSS_S_COMPLETE )
+	{
+		log_errors( "gss_import_name", majStatus, minStatus );
+		iResult = kSGSSImportNameErr;
+	}
+	else
+	{
+		// Send name to logs
+		(void)gss_display_name( &minStatus, principalName, &nameToken, &mechid );
+
+		(void)gss_release_buffer( &minStatus, &nameToken );
+
+		majStatus = gss_acquire_cred( &minStatus, 
+										principalName, 
+										GSS_C_INDEFINITE, 
+										GSS_C_NO_OID_SET, 
+										GSS_C_ACCEPT, 
+									   &stCredentials,
+										NULL, 
+										NULL );
+
+		if ( majStatus != GSS_S_COMPLETE )
+		{
+			log_errors( "gss_acquire_cred", majStatus, minStatus );
+			iResult = kSGSSAquireCredErr;
+		}
+		else
+		{
+			gss_ctx_id_t ctx = GSS_C_NO_CONTEXT;
+		}
+		(void)gss_release_name( &minStatus, &principalName );
+	}
+
+	free( pService );
+
+	return( iResult );
+
+} /* gss_Init */
+
+
+/* -----------------------------------------------------------
+ *	get_realm_form_creds ()
+ * ----------------------------------------------------------- */
+
+int get_realm_form_creds ( char *inBuffer, int inSize )
+{
+	int			iResult		= GSS_S_COMPLETE;
+	char		buffer[256] = {0};
+	char	   *token1		= NULL;
+
+	iResult = get_principal_str( buffer, 256 );
+	if ( iResult == 0 )
+	{
+		token1 = strrchr( buffer, '@' );
+		if ( token1 != NULL )
+		{
+			++token1;
+			if ( strlen( token1 ) > inSize - 1 )
+			{
+				iResult = kSGSSBufferSizeErr;
+			}
+			else
+			{
+				strncpy( inBuffer, token1, inSize - 1 );
+				inBuffer[ strlen( token1 ) ] = 0;
+			}
+		}
+		else
+		{
+			iResult = kUnknownErr;
+		}
+	}
+
+	return( iResult );
+
+} /* get_realm_form_creds */
+
+
+/* -----------------------------------------------------------
+ *	get_principal_str ()
+ * ----------------------------------------------------------- */
+
+int get_principal_str ( char *inOutBuf, int inSize )
+{
+	OM_uint32		minStatus	= 0;
+	OM_uint32		majStatus	= 0;
+	gss_name_t		principalName;
+	gss_buffer_desc	token;
+	gss_OID			id;
+
+	majStatus = gss_inquire_cred(&minStatus, stCredentials, &principalName,  NULL, NULL, NULL);
+	if ( majStatus != GSS_S_COMPLETE )
+	{
+		return( kSGSSInquireCredErr );
+	}
+
+	majStatus = gss_display_name( &minStatus, principalName, &token, &id );
+	if ( majStatus != GSS_S_COMPLETE )
+	{
+		return( kSGSSInquireCredErr );
+	}
+
+	majStatus = gss_release_name( &minStatus, &principalName );
+	if ( inSize - 1 < token.length )
+	{
+		return( kSGSSBufferSizeErr );
+	}
+
+	strncpy( inOutBuf, (char *)token.value, token.length );
+	inOutBuf[ token.length ] = 0;
+
+	(void)gss_release_buffer( &minStatus, &token );
+
+	return( GSS_S_COMPLETE );
+
+} /* get_principal_str */
+
+
+/* -----------------------------------------------------------
+ *	display_name ()
+ * ----------------------------------------------------------- */
+
+OM_uint32 display_name ( const gss_name_t principalName )
+{
+	OM_uint32		minStatus	= 0;
+	OM_uint32		majStatus	= 0;
+	gss_OID			mechid;
+	gss_buffer_desc nameToken;
+
+	majStatus = gss_display_name( &minStatus, principalName, &nameToken, &mechid );
+
+	(void)gss_release_buffer( &minStatus, &nameToken );
+
+	return( majStatus );
+
+} /* display_name */
 
 
 #define CHAR64(c)  (((c) < 0 || (c) > 127) ? -1 : index_64[(c)])
@@ -875,13 +1259,11 @@ int sEncodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen
 	sDecodeBase64 ()
    ----------------------------------------------------------------- */
 
-int sDecodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen )
+int sDecodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen, int *destLen )
 {
 	int				iResult		= 0;
 	unsigned long	i			= 0;
 	unsigned long	j			= 0;
-	unsigned long	uiInLen		= 0;
-	unsigned long	uiLen		= 0;
 	unsigned long	c1			= 0;
 	unsigned long	c2			= 0;
 	unsigned long	c3			= 0;
@@ -894,7 +1276,6 @@ int sDecodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen
 	}
 
 	pStr = (const unsigned char *)inStr;
-	uiInLen = inLen;
 
 	/* Skip past the '+ ' */
 	if ( (pStr[ 0 ] == '+') && (pStr[ 1 ] == ' ') )
@@ -907,9 +1288,7 @@ int sDecodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen
 	}
 	else
 	{
-		memset( outStr, 0, outLen );
-
-		for ( i = 0; i < uiInLen / 4; i++ )
+		for ( i = 0; i < inLen / 4; i++ )
 		{
 			c1 = pStr[ 0 ];
 			if ( CHAR64( c1 ) == -1 )
@@ -942,18 +1321,35 @@ int sDecodeBase64 ( const char *inStr, const int inLen, char *outStr, int outLen
 			pStr += 4;
 
 			outStr[ j++ ] = ( (CHAR64(c1) << 2) | (CHAR64(c2) >> 4) );
-			++uiLen;
+
+			if ( j >= outLen )
+			{
+				return( -1 );
+			}
+
 			if ( c3 != '=' )
 			{
 				outStr[ j++ ] = ( ((CHAR64(c2) << 4) & 0xf0) | (CHAR64(c3) >> 2) );
-				++uiLen;
+				if ( j >= outLen )
+				{
+					return( -1 );
+				}
 				if ( c4 != '=' )
 				{
 					outStr[ j++ ] = ( ((CHAR64(c3) << 6) & 0xc0) | CHAR64(c4) );
-					++uiLen;
+					if ( j >= outLen )
+					{
+						return( -1 );
+					}
 				}
 			}
 		}
+		outStr[ j ] = 0;
+	}
+
+	if ( destLen )
+	{
+		*destLen = j;
 	}
 
 	return( iResult );
@@ -1474,6 +1870,135 @@ int sValidateResponse ( const char *inUserID, const char *inChallenge, const cha
 
 } /* sValidateResponse */
 
+
+#define	kPlistFilePath					"/etc/MailServicesOther.plist"
+#define	kXMLDictionary					"postfix"
+#define	kXMLSMTP_Principal				"smtp_principal"
+
+/* -----------------------------------------------------------------
+	aodGetServerPrincipal ()
+   ----------------------------------------------------------------- */
+
+char * get_server_principal ( void )
+{
+    FILE			   *pFile		= NULL;
+	char			   *outStr		= NULL;
+	char			   *buf			= NULL;
+	ssize_t				bytes		= 0;
+	struct stat			fileStat;
+	bool				bFound		= FALSE;
+	CFStringRef			cfStringRef	= NULL;
+	char			   *pValue		= NULL;
+	CFDataRef			cfDataRef	= NULL;
+	CFPropertyListRef	cfPlistRef	= NULL;
+	CFDictionaryRef		cfDictRef	= NULL;
+	CFDictionaryRef		cfDictPost	= NULL;
+
+    pFile = fopen( kPlistFilePath, "r" );
+    if ( pFile == NULL )
+	{
+		syslog( LOG_ERR, "Cannot open principal file" );
+		return( NULL );
+	}
+
+	if ( -1 == fstat( fileno( pFile ), &fileStat ) )
+	{
+		fclose( pFile );
+		syslog( LOG_ERR, "Cannot get stat on principal file" );
+		return( NULL );
+	}
+
+	buf = (char *)malloc( fileStat.st_size + 1 );
+	if ( buf == NULL )
+	{
+		fclose( pFile );
+		syslog( LOG_ERR, "Cannot alloc principal buffer" );
+		return( NULL );
+	}
+
+	memset( buf, 0, fileStat.st_size + 1 );
+	bytes = read( fileno( pFile ), buf, fileStat.st_size );
+	if ( -1 == bytes )
+	{
+		fclose( pFile );
+		free( buf );
+		syslog( LOG_ERR, "Cannot read principal file" );
+		return( NULL );
+	}
+
+	cfDataRef = CFDataCreate( NULL, (const UInt8 *)buf, fileStat.st_size );
+	if ( cfDataRef != NULL )
+	{
+		cfPlistRef = CFPropertyListCreateFromXMLData( kCFAllocatorDefault, cfDataRef, kCFPropertyListImmutable, NULL );
+		if ( cfPlistRef != NULL )
+		{
+			if ( CFDictionaryGetTypeID() == CFGetTypeID( cfPlistRef ) )
+			{
+				cfDictRef = (CFDictionaryRef)cfPlistRef;
+
+				bFound = CFDictionaryContainsKey( cfDictRef, CFSTR( kXMLDictionary ) );
+				if ( bFound == true )
+				{
+					cfDictPost = (CFDictionaryRef)CFDictionaryGetValue( cfDictRef, CFSTR( kXMLDictionary ) );
+					if ( cfDictPost != NULL )
+					{
+						cfStringRef = (CFStringRef)CFDictionaryGetValue( cfDictPost, CFSTR( kXMLSMTP_Principal ) );
+						if ( cfStringRef != NULL )
+						{
+							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
+							{
+								pValue = (char *)CFStringGetCStringPtr( cfStringRef, kCFStringEncodingMacRoman );
+								if ( pValue != NULL )
+								{
+									outStr = malloc( strlen( pValue ) + 1 );
+									if ( outStr != NULL )
+									{
+										strcpy( outStr, pValue );
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			CFRelease( cfPlistRef );
+		}
+		CFRelease( cfDataRef );
+	}
+
+	return( outStr );
+
+} /* get_server_principal */
+
+void log_errors ( char *inName, OM_uint32 inMajor, OM_uint32 inMinor )
+{
+	OM_uint32		msg_context = 0;
+	OM_uint32		minStatus = 0;
+	OM_uint32		majStatus = 0;
+	gss_buffer_desc errBuf;
+	int				count = 1;
+
+	do {
+		majStatus = gss_display_status( &minStatus, inMajor, GSS_C_GSS_CODE, GSS_C_NULL_OID, &msg_context, &errBuf );
+
+		syslog( LOG_ERR, "  Major Error (%d): %s (%s)", count, (char *)errBuf.value, inName );
+
+		majStatus = gss_release_buffer( &minStatus, &errBuf );
+		++count;
+	} while ( msg_context != 0 );
+
+	count = 1;
+	msg_context = 0;
+	do {
+		majStatus = gss_display_status( &minStatus, inMinor, GSS_C_MECH_CODE, GSS_C_NULL_OID, &msg_context, &errBuf );
+
+		syslog( LOG_ERR, "  Minor Error (%d): %s (%s)", count, (char *)errBuf.value, inName );
+
+		majStatus = gss_release_buffer( &minStatus, &errBuf );
+		++count;
+
+	} while ( msg_context != 0 );
+
+} // LogErrors
+
 #endif
-
-

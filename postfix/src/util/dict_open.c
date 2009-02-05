@@ -167,6 +167,7 @@
 #include <dict_env.h>
 #include <dict_unix.h>
 #include <dict_tcp.h>
+#include <dict_sdbm.h>
 #include <dict_dbm.h>
 #include <dict_db.h>
 #include <dict_nis.h>
@@ -195,6 +196,7 @@ static DICT_OPEN_INFO dict_open_info[] = {
 #if 0
     DICT_TYPE_TCP, dict_tcp_open,
 #endif
+    "sdbm", dict_sdbm_open,
 #ifdef HAS_DBM
     DICT_TYPE_DBM, dict_dbm_open,
 #endif

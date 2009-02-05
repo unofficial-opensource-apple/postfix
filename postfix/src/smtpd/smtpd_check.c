@@ -291,6 +291,7 @@
 #include <string_list.h>
 #include <namadr_list.h>
 #include <domain_list.h>
+#include <string_list.h>
 #include <mail_params.h>
 #include <canon_addr.h>
 #include <resolve_clnt.h>
@@ -370,6 +371,9 @@ static MAPS *smtpd_sender_login_maps;
 static DOMAIN_LIST *relay_domains;
 static NAMADR_LIST *mynetworks;
 static NAMADR_LIST *perm_mx_networks;
+#ifdef HAS_SSL
+static MAPS *relay_ccerts;
+#endif
 
  /*
   * How to do parent domain wildcard matching, if any.
@@ -627,6 +631,10 @@ void    smtpd_check_init(void)
     perm_mx_networks =
 	namadr_list_init(match_parent_style(VAR_PERM_MX_NETWORKS),
 			 var_perm_mx_networks);
+#ifdef HAS_SSL
+    relay_ccerts = maps_create(VAR_RELAY_CCERTS, var_relay_ccerts,
+			       DICT_FLAG_LOCK);
+#endif
 
     /*
      * Pre-parse and pre-open the recipient maps.
@@ -1123,6 +1131,36 @@ static int reject_unknown_mailhost(SMTPD_STATE *state, const char *name,
 }
 
 static int permit_auth_destination(SMTPD_STATE *state, char *recipient);
+
+/* permit_tls_clientcerts - OK/DUNNO for message relaying */
+
+#ifdef HAS_SSL
+static int permit_tls_clientcerts(SMTPD_STATE *state, int permit_all_certs)
+{
+    char   *low_name;
+    const char *found;
+
+    if (state->tls_info.peer_verified && permit_all_certs) {
+	if (msg_verbose)
+	    msg_info("Relaying allowed for all verified client certificates");
+	return(SMTPD_CHECK_OK);
+    }
+
+    if (state->tls_info.peer_verified && state->tls_info.peer_fingerprint) {
+	low_name = lowercase(mystrdup(state->tls_info.peer_fingerprint));
+	found = maps_find(relay_ccerts, low_name, DICT_FLAG_FIXED);
+	myfree(low_name);
+	if (found) {
+	    if (msg_verbose)
+		msg_info("Relaying allowed for certified client: %s", found);
+	    return (SMTPD_CHECK_OK);
+	} else if (msg_verbose)
+	    msg_info("relay_clientcerts: No match for fingerprint '%s'",
+		     state->tls_info.peer_fingerprint);
+    }
+    return (SMTPD_CHECK_DUNNO);
+}
+#endif
 
 /* check_relay_domains - OK/FAIL for message relaying */
 
@@ -2797,6 +2835,12 @@ static int generic_checks(SMTPD_STATE *state, ARGV *restrictions,
 #else
 		msg_warn("restriction `%s' ignored: no SASL support", name);
 #endif
+#ifdef HAS_SSL
+	} else if (strcasecmp(name, PERMIT_TLS_ALL_CLIENTCERTS) == 0) {
+	  status = permit_tls_clientcerts(state, 1);
+	} else if (strcasecmp(name, PERMIT_TLS_CLIENTCERTS) == 0) {
+	  status = permit_tls_clientcerts(state, 0);
+#endif
 	} else if (strcasecmp(name, REJECT_UNKNOWN_RCPTDOM) == 0) {
 	    if (state->recipient)
 		status = reject_unknown_address(state, state->recipient,
@@ -3387,6 +3431,7 @@ char   *var_rcpt_checks = "";
 char   *var_etrn_checks = "";
 char   *var_data_checks = "";
 char   *var_relay_domains = "";
+char   *var_relay_ccerts = "";
 char   *var_mynetworks = "";
 char   *var_notify_classes = "";
 

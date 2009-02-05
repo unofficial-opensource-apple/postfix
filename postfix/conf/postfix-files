@@ -70,6 +70,7 @@ $daemon_directory/showq:f:root:-:755
 $daemon_directory/smtp:f:root:-:755
 $daemon_directory/smtpd:f:root:-:755
 $daemon_directory/spawn:f:root:-:755
+$daemon_directory/tlsmgr:f:root:-:755
 $daemon_directory/trivial-rewrite:f:root:-:755
 $daemon_directory/virtual:f:root:-:755
 $command_directory/postalias:f:root:-:755
@@ -141,6 +142,7 @@ $manpage_directory/man8/showq.8:f:root:-:644
 $manpage_directory/man8/smtp.8:f:root:-:644
 $manpage_directory/man8/smtpd.8:f:root:-:644
 $manpage_directory/man8/spawn.8:f:root:-:644
+$manpage_directory/man8/tlsmgr.8:f:root:-:644
 $manpage_directory/man8/trivial-rewrite.8:f:root:-:644
 $manpage_directory/man8/virtual.8:f:root:-:644
 $sample_directory/sample-aliases.cf:f:root:-:644
@@ -168,6 +170,7 @@ $sample_directory/sample-resource.cf:f:root:-:644
 $sample_directory/sample-rewrite.cf:f:root:-:644
 $sample_directory/sample-smtp.cf:f:root:-:644
 $sample_directory/sample-smtpd.cf:f:root:-:644
+$sample_directory/sample-tls.cf:f:root:-:644
 $sample_directory/sample-transport.cf:f:root:-:644
 $sample_directory/sample-virtual.cf:f:root:-:644
 $readme_directory/ADDRESS_CLASS_README:f:root:-:644

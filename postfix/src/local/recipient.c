@@ -89,6 +89,11 @@
 #include <mypwd.h>
 #include <canon_addr.h>
 
+/* Apple Open Directory */
+
+#include <DirectoryService/DirServices.h>
+#include "aod.h"
+
 /* Application-specific. */
 
 #include "local.h"
@@ -101,8 +106,10 @@ static int deliver_switch(LOCAL_STATE state, USER_ATTR usr_attr)
 {
     char   *myname = "deliver_switch";
     int     status = 0;
+	int		addr_count = 0;
     struct stat st;
     struct mypasswd *mypwd;
+	struct od_user_opts user_opts;
 
     /*
      * Make verbose logging easier to understand.
@@ -175,6 +182,22 @@ static int deliver_switch(LOCAL_STATE state, USER_ATTR usr_attr)
      */
     if (state.msg_attr.exp_type == EXPAND_TYPE_INCL)
 	return (deliver_indirect(state));
+
+	/*
+	 * Check for forward info in user record
+	 */
+
+	if ( var_enable_server_options )
+	{
+		if ( aodGetUserOptions( state.msg_attr.user, &user_opts ) == eDSNoErr )
+		{
+			if ( user_opts.fAcctState == eAcctForwarded )
+			{
+				status = deliver_token_string( state, usr_attr, user_opts.fAutoFwdAddr, &addr_count );
+				return( status );
+			}
+		}
+	}
 
     /*
      * Delivery to local user. First try expansion of the recipient's

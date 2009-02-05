@@ -117,3 +117,15 @@ smtp_sasl_password_maps = hash:/etc/postfix/saslpass
 #
 #smtp_sasl_security_options = 
 smtp_sasl_security_options = noplaintext
+
+# Sending AUTH data over an unencrypted channel poses a security risk. When
+# smtpd_tls_enforce_tls is set, AUTH will only be announced and accepted,
+# once the TLS layer has been activated via the STARTTLS protocol. If
+# TLS layer encryption is optional, it may however still be useful to only
+# offer AUTH, when TLS is active. To not break compatiblity with unpatched
+# postfix versions, the default is to accept AUTH without encryption. In
+# order to change this behaviour, set smtpd_tls_auth_only = yes.
+# THIS OPTION ONLY WORKS WITH SSL/TLS SUPPORT COMPILED IN.
+#
+# smtpd_tls_auth_only = no
+

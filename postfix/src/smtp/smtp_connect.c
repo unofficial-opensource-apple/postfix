@@ -117,6 +117,7 @@
 
 #include <mail_params.h>
 #include <own_inet_addr.h>
+#include <pfixtls.h>
 
 /* DNS library. */
 
@@ -129,7 +130,7 @@
 
 /* smtp_connect_addr - connect to explicit address */
 
-static SMTP_SESSION *smtp_connect_addr(DNS_RR *addr, unsigned port,
+static SMTP_SESSION *smtp_connect_addr(char *dest, DNS_RR *addr, unsigned port,
 				               VSTRING *why)
 {
     char   *myname = "smtp_connect_addr";
@@ -263,7 +264,7 @@ static SMTP_SESSION *smtp_connect_addr(DNS_RR *addr, unsigned port,
 	vstream_fclose(stream);
 	return (0);
     }
-    return (smtp_session_alloc(stream, addr->name, inet_ntoa(sin.sin_addr)));
+    return (smtp_session_alloc(dest, stream, addr->name, inet_ntoa(sin.sin_addr)));
 }
 
 /* smtp_connect_host - direct connection to host */
@@ -281,7 +282,7 @@ SMTP_SESSION *smtp_connect_host(char *host, unsigned port, VSTRING *why)
      */
     addr_list = smtp_host_addr(host, why);
     for (addr = addr_list; addr; addr = addr->next) {
-	if ((session = smtp_connect_addr(addr, port, why)) != 0) {
+	if ((session = smtp_connect_addr(host, addr, port, why)) != 0) {
 	    session->best = 1;
 	    break;
 	}
@@ -310,7 +311,7 @@ SMTP_SESSION *smtp_connect_domain(char *name, unsigned port, VSTRING *why,
      */
     addr_list = smtp_domain_addr(name, why, found_myself);
     for (addr = addr_list; addr; addr = addr->next) {
-	if ((session = smtp_connect_addr(addr, port, why)) != 0) {
+	if ((session = smtp_connect_addr(name, addr, port, why)) != 0) {
 	    session->best = (addr->pref == addr_list->pref);
 	    break;
 	}

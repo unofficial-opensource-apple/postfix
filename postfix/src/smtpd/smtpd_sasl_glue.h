@@ -11,6 +11,12 @@
  /*
   * SASL protocol interface
   */
+
+#define	ODA_NO_ERROR			0
+#define	ODA_AUTH_FAILED			-2000
+#define	ODA_AUTH_CANCEL			-2001
+#define	ODA_PROTOCOL_ERROR		-2002
+
 typedef enum {
 	eAODNoErr				= 0,
 	eAODParamErr			= -1,
@@ -21,8 +27,20 @@ typedef enum {
 	eAODAuthFailed			= -6,
 	eAODAuthWarnNewPW		= -7,
 	eAODAuthWarnExpirePW	= -8,
-	eAOD					= 0
+	eAOD					= 0xFF
 } eAODError;
+
+typedef enum
+{
+	kSGSSSuccess		= 0,
+	kSGSSBufferSizeErr	= -70001,
+	kSGSSImportNameErr	= -70002,
+	kSGSSAquireCredErr	= -70003,
+	kSGSSInquireCredErr	= -70004,
+	kSGSSAuthFailed		= -70005,
+	kGSSErrUnknownType	= -70010,
+	kUnknownErr			= -70010
+} eGSSError;
 
 extern void smtpd_sasl_initialize(int);
 extern void smtpd_sasl_connect(SMTPD_STATE *);

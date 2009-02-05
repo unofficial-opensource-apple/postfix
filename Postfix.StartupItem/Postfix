@@ -7,6 +7,8 @@ StartService ()
     if [ "${MAILSERVER:=-NO-}" = "-YES-" ]; then
             ConsoleMessage "Starting mail services"
 	    /usr/sbin/postfix start
+    elif [ "${MAILSERVER:=-NO-}" = "-AUTOMATIC-" ]; then
+	    /usr/sbin/postfix-watch
     fi
 }
 
@@ -14,6 +16,7 @@ StopService ()
 {
 	ConsoleMessage "Stopping Postfix mail services"
 	/usr/sbin/postfix stop
+	killall -1 postfix-watch 2> /dev/null
 }
 
 RestartService ()
@@ -26,6 +29,4 @@ RestartService ()
     fi
 }
 
-if [ ! -e /System/Library/CoreServices/ServerVersion.plist ]; then
-	RunService "$1"
-fi
+RunService "$1"

@@ -99,6 +99,11 @@ void    smtpd_state_init(SMTPD_STATE *state, VSTREAM *stream)
     state->defer_if_permit.reason = 0;
     state->discard = 0;
     state->expand_buf = 0;
+    state->tls_active = 0;
+    state->tls_use_tls = 0;
+    state->tls_enforce_tls = 0;
+    state->tls_info = tls_info_zero;
+    state->tls_auth_only = 0;
 
 #ifdef USE_SASL_AUTH
     if (SMTPD_STAND_ALONE(state))

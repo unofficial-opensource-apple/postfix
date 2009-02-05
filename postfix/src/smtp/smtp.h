@@ -27,6 +27,7 @@
   * Global library.
   */
 #include <deliver_request.h>
+#include <pfixtls.h>
 
  /*
   * State information associated with each SMTP delivery. We're bundling the
@@ -79,9 +80,14 @@ typedef struct SMTP_SESSION {
     char   *addr;			/* mail exchanger */
     char   *namaddr;			/* mail exchanger */
     int     best;			/* most preferred host */
+    int     tls_use_tls;		/* can do TLS */
+    int     tls_enforce_tls;		/* must do TLS */
+    int     tls_enforce_peername;	/* cert must match */
+    tls_info_t tls_info;		/* TLS connection state */
 } SMTP_SESSION;
 
-extern SMTP_SESSION *smtp_session_alloc(VSTREAM *, char *, char *);
+extern void smtp_tls_list_init(void);
+extern SMTP_SESSION *smtp_session_alloc(char *, VSTREAM *, char *, char *);
 extern void smtp_session_free(SMTP_SESSION *);
 
  /*
