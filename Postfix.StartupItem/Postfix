@@ -1,0 +1,31 @@
+#!/bin/sh
+
+. /etc/rc.common
+
+StartService ()
+{
+    if [ "${MAILSERVER:=-NO-}" = "-YES-" ]; then
+            ConsoleMessage "Starting mail services"
+	    /usr/sbin/postfix start
+    fi
+}
+
+StopService ()
+{
+	ConsoleMessage "Stopping Postfix mail services"
+	/usr/sbin/postfix stop
+}
+
+RestartService ()
+{
+    if [ "${MAILSERVER:=-NO-}" = "-YES-" ]; then
+	ConsoleMessage "Reloading Postfix configuration"
+	/usr/sbin/postfix reload
+    else
+	StopService
+    fi
+}
+
+if [ ! -e /System/Library/CoreServices/ServerVersion.plist ]; then
+	RunService "$1"
+fi
