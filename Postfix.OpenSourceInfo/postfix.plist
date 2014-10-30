@@ -3,24 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>OpenSourceImportDate</key>
-	<string>2012-05-03</string>
+	<string>2014-03-07</string>
 	<key>OpenSourceLicense</key>
 	<string>IBM PUBLIC LICENSE VERSION 1.0 - SECURE MAILER</string>
 	<key>OpenSourceLicenseFile</key>
 	<string>postfix.txt</string>
-	<key>OpenSourceModifications</key>
-	<array>
-		<string>Apple added modifications for Open Directory auto-forwarding integration</string>
-		<string>Apple added modifications to allow for Open Directory authentication for SMTP relay</string>
-		<string>RFC 3030 - Binary ESMTP</string>
-		<string>RFC 4468 - Submission BURL Extension</string>
-	</array>
 	<key>OpenSourceProject</key>
 	<string>Postfix</string>
 	<key>OpenSourceURL</key>
-	<string>ftp://postfix.cloud9.net/official/postfix-2.9.2.tar.gz</string>
+	<string>http://mirrors-usa.go-parts.com/postfix/source/official/postfix-2.11.0.tar.gz</string>
 	<key>OpenSourceVersion</key>
-	<string>postfix-2.9.2</string>
+	<string>postfix-2.11.0</string>
 	<key>OpenSourceWebsiteURL</key>
 	<string>http://www.postfix.org</string>
 </dict>
